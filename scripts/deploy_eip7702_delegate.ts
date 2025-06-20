@@ -26,10 +26,6 @@ async function main() {
   console.log(
     "- Delegation designator format: 0xef0100" + delegateAddress.slice(2)
   );
-  console.log(
-    "- Gas used for deployment:",
-    (await delegate.deploymentTransaction()?.gasUsed) || "N/A"
-  );
 
   console.log("\n🚀 Next steps:");
   console.log(

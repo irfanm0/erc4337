@@ -6,6 +6,8 @@ import {
   AbiCoder,
   getBytes,
   hexlify,
+  Wallet,
+  randomBytes
 } from "ethers";
 
 // EIP-7702 Constants
@@ -35,7 +37,7 @@ interface Call {
  * @param chainId Chain ID (0 for universal)
  */
 async function createAuthorization(
-  signer: ethers.Wallet,
+  signer: Wallet,
   delegateAddress: string,
   nonce: bigint,
   chainId: bigint = 0n
@@ -78,7 +80,7 @@ async function createAuthorization(
  * @param data Transaction data
  */
 async function submitSetCodeTransaction(
-  sponsor: ethers.Wallet,
+  sponsor: Wallet,
   authorizations: AuthorizationTuple[],
   target: string = ethers.ZeroAddress,
   value: bigint = 0n,
@@ -127,9 +129,9 @@ async function demonstrateEIP7702() {
   console.log("✅ This ONE contract can serve MULTIPLE EOAs!\n");
 
   // Create multiple EOAs that will delegate to the same contract
-  const eoa1 = new ethers.Wallet(ethers.randomBytes(32));
-  const eoa2 = new ethers.Wallet(ethers.randomBytes(32));
-  const eoa3 = new ethers.Wallet(ethers.randomBytes(32));
+  const eoa1 = new ethers.Wallet(ethers.randomBytes(32).toString());
+  const eoa2 = new ethers.Wallet(ethers.randomBytes(32).toString());
+  const eoa3 = new ethers.Wallet(ethers.randomBytes(32).toString());
 
   console.log("👤 EOA 1:", eoa1.address);
   console.log("👤 EOA 2:", eoa2.address);
@@ -193,8 +195,8 @@ async function demonstrateSessionKeys() {
   await delegate.waitForDeployment();
 
   // Simulate EOA delegation (in practice this would be done via EIP-7702)
-  const eoaOwner = new ethers.Wallet(ethers.randomBytes(32));
-  const sessionKey = new ethers.Wallet(ethers.randomBytes(32));
+  const eoaOwner = new ethers.Wallet(ethers.randomBytes(32).toString());
+  const sessionKey = new ethers.Wallet(ethers.randomBytes(32).toString());
 
   console.log("EOA Owner:", eoaOwner.address);
   console.log("Session Key:", sessionKey.address);
