@@ -4,6 +4,7 @@ import {
   POLYGON_RPC_URL,
   BINANCE_RPC_URL,
   SEPOLIA_RPC_URL,
+  HOLESKY_RPC_URL,
 } from "./rpcList";
 import "@nomicfoundation/hardhat-toolbox";
 import dotenv from "dotenv";
@@ -28,13 +29,18 @@ const forkingConfig = {
     blockNumber: 48631395,
     chainId: 56,
   },
+  sepolia: {
+    url: SEPOLIA_RPC_URL,
+    blockNumber: 22337449,
+    chainId: 11155111,
+  },
 };
 
 const config: HardhatUserConfig = {
   solidity: {
     version: "0.8.28",
     settings: {
-      evmVersion: "cancun",
+      evmVersion: "prague",
       optimizer: {
         enabled: true,
         runs: 200,
@@ -86,6 +92,16 @@ const config: HardhatUserConfig = {
         : [],
       chainId: 56,
     },
+    holesky: {
+      url: HOLESKY_RPC_URL,
+      accounts: [process.env.PRIVATE_KEY!],
+      chainId: 17000,
+    },
+    sepolia: {
+      url: SEPOLIA_RPC_URL,
+      accounts: [process.env.PRIVATE_KEY!],
+      chainId: 11155111,
+    },
     // ethereum: {
     //   url: ETH_RPC_URL,
     //   accounts: [process.env.PRIVATE_KEY!],
@@ -99,6 +115,8 @@ const config: HardhatUserConfig = {
     apiKey: {
       bscTestnet: process.env.BSCSCAN_API_KEY || "",
       bsc: process.env.BSCSCAN_API_KEY || "",
+      holesky: process.env.ETHERSCAN_API_KEY || "",
+      sepolia: process.env.ETHERSCAN_API_KEY || "",
     },
   },
 };

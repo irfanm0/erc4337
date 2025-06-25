@@ -1,13 +1,9 @@
 import { ethers } from "hardhat";
 import {
-  SigningKey,
   keccak256,
-  toUtf8Bytes,
   AbiCoder,
   getBytes,
-  hexlify,
   Wallet,
-  randomBytes
 } from "ethers";
 
 // EIP-7702 Constants

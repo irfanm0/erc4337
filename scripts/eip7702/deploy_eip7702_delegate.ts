@@ -6,8 +6,9 @@ async function main() {
   const [deployer] = await ethers.getSigners();
   console.log("Deploying with account:", deployer.address);
   console.log(
-    "Account balance:",
-    ethers.formatEther(await deployer.provider.getBalance(deployer.address))
+    `Account balance: ${ethers.formatEther(
+      await deployer.provider.getBalance(deployer.address)
+    )} ETH`
   );
 
   // Deploy the delegate contract
