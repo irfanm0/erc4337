@@ -8,6 +8,7 @@ import {
 } from "./rpcList";
 import "@nomicfoundation/hardhat-toolbox";
 import dotenv from "dotenv";
+import "@nomicfoundation/hardhat-verify";
 
 dotenv.config();
 
@@ -102,6 +103,16 @@ const config: HardhatUserConfig = {
       accounts: [process.env.PRIVATE_KEY!],
       chainId: 11155111,
     },
+    polygon: {
+      url: "https://dimensional-patient-card.matic.quiknode.pro/4881363ed657eafc1dfa4da1c551980e0ce6b9af/",
+      accounts: [process.env.DEV_PRIVATE_KEY!],
+      chainId: 137,
+    },
+    ethereum: {
+      url: "https://eth.llamarpc.com",
+      accounts: [process.env.DEV_PRIVATE_KEY!],
+      chainId: 1,
+    },
     // ethereum: {
     //   url: ETH_RPC_URL,
     //   accounts: [process.env.PRIVATE_KEY!],
@@ -112,12 +123,25 @@ const config: HardhatUserConfig = {
     // },
   },
   etherscan: {
-    apiKey: {
-      bscTestnet: process.env.BSCSCAN_API_KEY || "",
-      bsc: process.env.BSCSCAN_API_KEY || "",
-      holesky: process.env.ETHERSCAN_API_KEY || "",
-      sepolia: process.env.ETHERSCAN_API_KEY || "",
-    },
+    apiKey: process.env.ETHERSCAN_API_KEY || "",
+    customChains: [
+      {
+        network: "bscMainnet",
+        chainId: 56,
+        urls: {
+          apiURL: "https://api.etherscan.io/v2/api",
+          browserURL: "https://bscscan.com",
+        },
+      },
+      {
+        network: "polygon",
+        chainId: 137,
+        urls: {
+          apiURL: "https://api.etherscan.io/v2/api",
+          browserURL: "https://polygonscan.com",
+        },
+      },
+    ],
   },
 };
 

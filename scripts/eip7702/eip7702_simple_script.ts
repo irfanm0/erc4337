@@ -81,13 +81,13 @@ async function demonstrateBatching(delegate: ethers.Contract) {
 
   const simpleCalls = [
     {
-      target: "0x742d35cc6440c45b8c566c64af4e6477d6c27bec",
-      value: 0n,
+      target: "0x541A53d783a90fb0224d86f90b366E8b33f63874",
+      value: ethers.parseEther("0.01"),
       data: "0x",
     },
     {
-      target: "0x0000000000000000000000000000000000000001",
-      value: 0n,
+      target: "0x14A561f3FCC1efa259897BE672e5D9C0b5ba28ab",
+      value: ethers.parseEther("0.01"),
       data: "0x",
     },
   ];
@@ -95,7 +95,7 @@ async function demonstrateBatching(delegate: ethers.Contract) {
   try {
     const tx = await delegate.executeBatch(simpleCalls);
     const receipt = await tx.wait();
-    console.log(`✅ Batch executed successfully! Gas: ${receipt.gasUsed}`);
+    console.log(`✅ Batch executed successfully! Hash: ${receipt.hash}`);
   } catch (error) {
     console.log(`❌ Batch execution failed: ${(error as Error).message}`);
   }
@@ -264,9 +264,14 @@ async function main() {
   // Initialize provider and signer
   const provider = new ethers.JsonRpcProvider(process.env.HOLESKY_RPC_URL!);
   const signer = new ethers.Wallet(process.env.PRIVATE_KEY!, provider);
+  const signer2 = new ethers.Wallet(
+    process.env.MERCHANT_PRIVATE_KEY!,
+    provider
+  );
+  const signer3 = new ethers.Wallet(process.env.DEV_PRIVATE_KEY!, provider);
 
   // Create delegate contract instance
-  const delegateAddress = "0x77779e1661d94046d3452f14Ce1246def602071A";
+  const delegateAddress = "0x0a645550394F2f4fa7702C941fd73b404224180e";
   const delegate = new ethers.Contract(
     signer.address,
     EIP7702DelegateABI,
@@ -330,7 +335,9 @@ async function main() {
   }
 
   // Uncomment to test undelegation:
-  // const undelegateResult = await undelegate(signer);
+  const undelegateResult = await undelegate(signer);
+  const undelegateResult2 = await undelegate(signer2);
+  const undelegateResult3 = await undelegate(signer3);
 }
 
 main().catch(console.error);

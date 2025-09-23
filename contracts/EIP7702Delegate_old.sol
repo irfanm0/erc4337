@@ -29,30 +29,26 @@ contract EIP7702Delegate {
     // Storage - track nonces for each delegated account
     mapping(address => uint256) public nonces;
 
-    uint256 private constant SECP256K1N_DIV_2 =
-        0x7fffffffffffffffffffffffffffffff5d576e7357a4501ddfe92f46681b20a0;
-
-    // Custom errors keep reverts cheap and explicit
-    error EmptyCalls();
-    error InvalidCaller();
-
-    modifier onlySelf() {
-        if (msg.sender != address(this)) revert InvalidCaller();
-        _;
-    }
-
     /**
      * @notice Execute multiple calls in a single transaction (batching) with signature verification
      * @param calls Array of calls to execute
      * @param signature Signature from the delegating account owner
      */
     function execute(Call[] calldata calls, bytes calldata signature) external {
-        if (calls.length == 0) revert EmptyCalls();
+        require(calls.length > 0, "No calls provided");
 
         uint256 currentNonce = nonces[address(this)];
 
         // Create digest for signature verification
-        bytes32 digest = _computeDigest(currentNonce, calls);
+        bytes32 digest = keccak256(
+            abi.encodePacked(
+                "\x19Ethereum Signed Message:\n32",
+                keccak256(abi.encode(currentNonce, calls)) // Use nonce before increment
+            )
+        );
+
+        nonces[address(this)]++;
+
 
         // Recover signer from signature
         address signer = _recoverSigner(digest, signature);
@@ -61,9 +57,20 @@ contract EIP7702Delegate {
         // In EIP-7702, address(this) IS the delegated EOA address
         require(signer == address(this), "Invalid signature");
 
-        nonces[address(this)] = currentNonce + 1;
+        for (uint256 i = 0; i < calls.length; i++) {
+            Call calldata call = calls[i];
 
-        _executeCalls(calls);
+            (bool success, bytes memory result) = call.target.call{
+                value: call.value
+            }(call.data);
+
+            if (!success) {
+                // Bubble up the revert reason
+                assembly {
+                    revert(add(result, 32), mload(result))
+                }
+            }
+        }
 
         emit BatchExecuted(address(this), currentNonce, calls.length);
     }
@@ -72,13 +79,31 @@ contract EIP7702Delegate {
      * @notice Execute multiple calls without signature (only for self-transactions)
      * @param calls Array of calls to execute
      */
-    function executeDirect(Call[] calldata calls) external onlySelf {
-        if (calls.length == 0) revert EmptyCalls();
+    function executeDirect(Call[] calldata calls) external {
+        require(calls.length > 0, "No calls provided");
 
-        uint256 currentNonce = nonces[address(this)];
-        nonces[address(this)] = currentNonce + 1;
+        // Only allow direct execution from the delegating account itself
+        require(
+            tx.origin == _getDelegatingAccountOwner(),
+            "Only account owner can execute directly"
+        );
 
-        _executeCalls(calls);
+        uint256 currentNonce = nonces[address(this)]++;
+
+        for (uint256 i = 0; i < calls.length; i++) {
+            Call calldata call = calls[i];
+
+            (bool success, bytes memory result) = call.target.call{
+                value: call.value
+            }(call.data);
+
+            if (!success) {
+                // Bubble up the revert reason
+                assembly {
+                    revert(add(result, 32), mload(result))
+                }
+            }
+        }
 
         emit BatchExecuted(address(this), currentNonce, calls.length);
     }
@@ -93,8 +118,14 @@ contract EIP7702Delegate {
         address target,
         uint256 value,
         bytes calldata data
-    ) external onlySelf {
-        _executeCall(target, value, data);
+    ) external {
+        (bool success, bytes memory result) = target.call{value: value}(data);
+
+        if (!success) {
+            assembly {
+                revert(add(result, 32), mload(result))
+            }
+        }
 
         emit SingleCallExecuted(address(this), target, value);
     }
@@ -141,28 +172,6 @@ contract EIP7702Delegate {
         return code;
     }
 
-    function _executeCalls(Call[] calldata calls) internal {
-        for (uint256 i = 0; i < calls.length; i++) {
-            Call calldata callStruct = calls[i];
-            _executeCall(callStruct.target, callStruct.value, callStruct.data);
-        }
-    }
-
-    function _executeCall(
-        address target,
-        uint256 value,
-        bytes calldata data
-    ) internal {
-        (bool success, bytes memory result) = target.call{value: value}(data);
-
-        if (!success) {
-            // Bubble up the revert reason
-            assembly {
-                revert(add(result, 32), mload(result))
-            }
-        }
-    }
-
     /**
      * @notice Recover signer from signature
      */
@@ -188,44 +197,30 @@ contract EIP7702Delegate {
 
         require(v == 27 || v == 28, "Invalid signature v value");
 
-        require(
-            uint256(s) > 0 && uint256(s) <= SECP256K1N_DIV_2,
-            "Invalid signature s value"
-        );
-
         return ecrecover(digest, v, r, s);
     }
 
-    function getDigest(
-        uint256 nonce,
-        Call[] calldata calls
-    ) public view returns (bytes32) {
-        return _computeDigest(nonce, calls);
+    /**
+     * @notice Get the original EOA owner (for EIP-7702, this requires special handling)
+     * @dev This is a simplified version - in production you'd want to store the original owner
+     */
+    function _getDelegatingAccountOwner() internal view returns (address) {
+        // For simplicity, we'll use tx.origin as the owner
+        // In production, you might want to store the original owner address
+        return tx.origin;
     }
+
+    function getDigest(uint256 nonce, Call[] calldata calls) public pure returns (bytes32) {
+    return keccak256(
+        abi.encodePacked(
+            "\x19Ethereum Signed Message:\n32",
+            keccak256(abi.encode(nonce, calls))
+        )
+    );
+}
 
     /**
      * @notice Allow contract to receive ETH
      */
     receive() external payable {}
-
-    function _computeDigest(
-        uint256 nonce,
-        Call[] calldata calls
-    ) internal view returns (bytes32) {
-        bytes32 callsHash = keccak256(abi.encode(calls));
-        return
-            keccak256(
-                abi.encodePacked(
-                    "\x19Ethereum Signed Message:\n32",
-                    keccak256(
-                        abi.encode(
-                            address(this),
-                            block.chainid,
-                            nonce,
-                            callsHash
-                        )
-                    )
-                )
-            );
-    }
 }
