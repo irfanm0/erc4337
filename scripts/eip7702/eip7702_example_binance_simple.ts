@@ -158,17 +158,30 @@ async function sendSponsoredTransaction(): Promise<void> {
 
   const callsArray = calls.map((call) => [call.target, call.value, call.data]);
 
-  const messageHash = ethers.keccak256(
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+  console.log(`Execution deadline: ${deadline}`);
+
+  const network = await provider.getNetwork();
+  const chainId = network.chainId;
+
+  const callsHash = ethers.keccak256(
     ethers.AbiCoder.defaultAbiCoder().encode(
-      ["uint256", "(address,uint256,bytes)[]"],
-      [currentNonce, callsArray]
+      ["(address,uint256,bytes)[]"],
+      [callsArray]
+    )
+  );
+
+  const typedHash = ethers.keccak256(
+    ethers.AbiCoder.defaultAbiCoder().encode(
+      ["address", "uint256", "uint256", "uint256", "bytes32"],
+      [delegatingAccount.address, chainId, currentNonce, deadline, callsHash]
     )
   );
 
   const digest = ethers.keccak256(
     ethers.concat([
       ethers.toUtf8Bytes("\x19Ethereum Signed Message:\n32"),
-      messageHash,
+      typedHash,
     ])
   );
 
@@ -177,8 +190,8 @@ async function sendSponsoredTransaction(): Promise<void> {
 
   const delegateInterface = new ethers.Interface(EIP7702Delegate.abi);
   const txData = delegateInterface.encodeFunctionData(
-    "execute((address,uint256,bytes)[],bytes)",
-    [calls, signature]
+    "execute((address,uint256,bytes)[],uint256,bytes)",
+    [calls, deadline, signature]
   );
 
   const finalTxRequest = {

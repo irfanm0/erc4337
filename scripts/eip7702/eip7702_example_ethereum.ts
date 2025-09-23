@@ -4,15 +4,15 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const POLYGON_RPC_URL = "https://dimensional-patient-card.matic.quiknode.pro/4881363ed657eafc1dfa4da1c551980e0ce6b9af/";
+const ETHYGON_RPC_URL = "https://rpc.ankr.com/eth/861439d3625735bd5aa57d38014afe05f52055b8f5bcc9f7fe777b8c9f1efec2";
 const PRIVATE_KEY_1 = process.env.PRIVATE_KEY!;
 const PRIVATE_KEY_2 = process.env.DEV_PRIVATE_KEY!;
 
 const TARGET_ADDRESS_1 = "0x9E864E196698cE11cB9374bA9f258f5e5c011c48";
 const TARGET_ADDRESS_2 = "0x9E864E196698cE11cB9374bA9f258f5e5c011c48";
-const DELEGATE_CONTRACT = "0xbbe94AfA7754531aBA2F2D430FCAd1cf3a62adDA";
+const DELEGATE_CONTRACT = "0xfB1B8fb55d1AABEb96bc1C36A9754B28E46A8b6a";
 
-const provider = new ethers.JsonRpcProvider(POLYGON_RPC_URL);
+const provider = new ethers.JsonRpcProvider(ETHYGON_RPC_URL);
 const delegatingAccount = new ethers.Wallet(PRIVATE_KEY_1, provider);
 const sponsorAccount = new ethers.Wallet(PRIVATE_KEY_2, provider);
 
@@ -286,12 +286,12 @@ async function sendNonSponsoredTransaction(): Promise<void> {
   const calls = [
     {
       target: TARGET_ADDRESS_1,
-      value: ethers.parseEther("0.001"),
+      value: ethers.parseEther("0.0001"),
       data: "0x",
     },
     {
       target: TARGET_ADDRESS_2,
-      value: ethers.parseEther("0.001"),
+      value: ethers.parseEther("0.0001"),
       data: "0x",
     },
   ];
@@ -363,12 +363,12 @@ async function sendSponsoredTransaction(): Promise<void> {
   const calls = [
     {
       target: TARGET_ADDRESS_1,
-      value: ethers.parseEther("0.001"),
+      value: ethers.parseEther("0.0001"),
       data: "0x",
     },
     {
       target: TARGET_ADDRESS_2,
-      value: ethers.parseEther("0.001"),
+      value: ethers.parseEther("0.0001"),
       data: "0x",
     },
   ];
@@ -452,7 +452,7 @@ async function sendSponsoredTransaction(): Promise<void> {
 }
 
 async function main(): Promise<void> {
-  console.log("🚀 Starting STRICT EIP-7702 Demo on BSC");
+  console.log("🚀 Starting STRICT EIP-7702 Demo on ETHEREUM");
   console.log(`📋 Delegating Account: ${delegatingAccount.address}`);
   console.log(`💰 Sponsor Account: ${sponsorAccount.address}`);
   console.log(`🎯 Delegate Contract: ${DELEGATE_CONTRACT}`);
@@ -460,24 +460,24 @@ async function main(): Promise<void> {
   const network = await provider.getNetwork();
   console.log(`🌐 Network: ${network.name} (Chain ID: ${network.chainId})`);
   
-  if (network.chainId !== 137n) {
-    throw new Error(`Expected Polygon mainnet (chainId: 137), got chainId: ${network.chainId}`);
+  if (network.chainId !== 1n) {
+    throw new Error(`Expected Ethereum mainnet (chainId: 1), got chainId: ${network.chainId}`);
   }
 
   // Check initial balances
   const delegatingBalance = await provider.getBalance(delegatingAccount.address);
   const sponsorBalance = await provider.getBalance(sponsorAccount.address);
-  console.log(`💳 Delegating account balance: ${ethers.formatEther(delegatingBalance)} POL`);
-  console.log(`💳 Sponsor account balance: ${ethers.formatEther(sponsorBalance)} POL`);
+  console.log(`💳 Delegating account balance: ${ethers.formatEther(delegatingBalance)} ETH`);
+  console.log(`💳 Sponsor account balance: ${ethers.formatEther(sponsorBalance)} ETH`);
 
   if (sponsorBalance === 0n) {
-    throw new Error(`Sponsor account has no POL for gas fees`);
+    throw new Error(`Sponsor account has no ETH for gas fees`);
   }
 
   const hasDelegatorBalance = delegatingBalance > 0n;
   if (!hasDelegatorBalance) {
     console.log(
-      `[Warn] Delegating account has 0 POL; will skip non-sponsored flow and rely entirely on sponsored transactions`
+      `[Warn] Delegating account has 0 ETH; will skip non-sponsored flow and rely entirely on sponsored transactions`
     );
   }
 

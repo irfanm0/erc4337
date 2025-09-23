@@ -35,6 +35,7 @@ contract EIP7702Delegate {
     // Custom errors keep reverts cheap and explicit
     error EmptyCalls();
     error InvalidCaller();
+    error SignatureExpired();
 
     modifier onlySelf() {
         if (msg.sender != address(this)) revert InvalidCaller();
@@ -46,13 +47,19 @@ contract EIP7702Delegate {
      * @param calls Array of calls to execute
      * @param signature Signature from the delegating account owner
      */
-    function execute(Call[] calldata calls, bytes calldata signature) external {
+    function execute(
+        Call[] calldata calls,
+        uint256 deadline,
+        bytes calldata signature
+    ) external {
         if (calls.length == 0) revert EmptyCalls();
 
         uint256 currentNonce = nonces[address(this)];
 
         // Create digest for signature verification
-        bytes32 digest = _computeDigest(currentNonce, calls);
+        bytes32 digest = _computeDigest(currentNonce, calls, deadline);
+
+        if (block.timestamp > deadline) revert SignatureExpired();
 
         // Recover signer from signature
         address signer = _recoverSigner(digest, signature);
@@ -198,9 +205,10 @@ contract EIP7702Delegate {
 
     function getDigest(
         uint256 nonce,
-        Call[] calldata calls
+        Call[] calldata calls,
+        uint256 deadline
     ) public view returns (bytes32) {
-        return _computeDigest(nonce, calls);
+        return _computeDigest(nonce, calls, deadline);
     }
 
     /**
@@ -210,7 +218,8 @@ contract EIP7702Delegate {
 
     function _computeDigest(
         uint256 nonce,
-        Call[] calldata calls
+        Call[] calldata calls,
+        uint256 deadline
     ) internal view returns (bytes32) {
         bytes32 callsHash = keccak256(abi.encode(calls));
         return
@@ -222,6 +231,7 @@ contract EIP7702Delegate {
                             address(this),
                             block.chainid,
                             nonce,
+                            deadline,
                             callsHash
                         )
                     )

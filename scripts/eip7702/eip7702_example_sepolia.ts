@@ -10,7 +10,7 @@ const PRIVATE_KEY_2 = process.env.PRIVATE_KEY!;
 
 const TARGET_ADDRESS_1 = "0x541A53d783a90fb0224d86f90b366E8b33f63874";
 const TARGET_ADDRESS_2 = "0x14A561f3FCC1efa259897BE672e5D9C0b5ba28ab";
-const DELEGATE_CONTRACT = "0x34515E7f26BE298979A8e68f5DA33efa87e4C748";
+const DELEGATE_CONTRACT = "0xA9E836Fe1891e53C3D96Bc34c038d3989B79990f";
 
 const provider = new ethers.JsonRpcProvider(SEPOLIA_RPC_URL);
 const delegatingAccount = new ethers.Wallet(PRIVATE_KEY_1, provider);
@@ -77,24 +77,25 @@ async function createEIP7702Authorization(
   console.log(`[Auth] Using nonce: ${nonce.toString()}`);
   console.log(`[Auth] Chain ID: ${chainId.toString()}`);
 
-  // EIP-7702 authorization signing format:
-  // keccak256(MAGIC || rlp([chain_id, address, nonce]))
-  const MAGIC = '0x05';
-
-  const rlpData = ethers.encodeRlp([
-    ethers.toBeHex(chainId),
-    normalizedDelegate.toLowerCase(),
-    ethers.toBeHex(nonce)
-  ]);
-
-  const digest = ethers.keccak256(ethers.concat([MAGIC, rlpData]));
-
   const signingKey = (wallet as any).signingKey
     ? (wallet as any).signingKey
     : new ethers.SigningKey(wallet.privateKey);
 
-  const sig = signingKey.sign(digest);
-  const signature = ethers.Signature.from(sig);
+  const authorizationRequest = {
+    address: normalizedDelegate,
+    nonce,
+    chainId,
+  } as const;
+
+  const digest = ethers.hashAuthorization(authorizationRequest);
+  const signature = ethers.Signature.from(signingKey.sign(digest));
+
+  const recovered = ethers.verifyAuthorization(authorizationRequest, signature);
+  if (recovered.toLowerCase() !== wallet.address.toLowerCase()) {
+    throw new Error(
+      `Authorization signature mismatch: expected ${wallet.address}, recovered ${recovered}`
+    );
+  }
 
   const authorization: AuthorizationEntry = {
     chainId,
@@ -391,6 +392,9 @@ async function sendSponsoredTransaction(): Promise<void> {
   const currentNonce = await delegateContractRead.getNonce();
   console.log(`[Sponsored] Delegate contract nonce: ${currentNonce}`);
 
+  const deadline = BigInt(Math.floor(Date.now() / 1000) + 3600);
+  console.log(`[Sponsored] Execution deadline: ${deadline}`);
+
   const callsArray = calls.map((call) => [call.target, call.value, call.data]);
 
   const network = await provider.getNetwork();
@@ -405,8 +409,14 @@ async function sendSponsoredTransaction(): Promise<void> {
 
   const typedHash = ethers.keccak256(
     ethers.AbiCoder.defaultAbiCoder().encode(
-      ["address", "uint256", "uint256", "bytes32"],
-      [delegatingAccount.address, chainId, currentNonce, callsHash]
+      ["address", "uint256", "uint256", "uint256", "bytes32"],
+      [
+        delegatingAccount.address,
+        chainId,
+        currentNonce,
+        deadline,
+        callsHash,
+      ]
     )
   );
 
@@ -424,8 +434,8 @@ async function sendSponsoredTransaction(): Promise<void> {
 
   const delegateInterface = new ethers.Interface(EIP7702Delegate.abi);
   const txData = delegateInterface.encodeFunctionData(
-    "execute((address,uint256,bytes)[],bytes)",
-    [calls, signature]
+    "execute((address,uint256,bytes)[],uint256,bytes)",
+    [calls, deadline, signature]
   );
 
   const finalTxRequest = {

@@ -6,7 +6,7 @@ pragma solidity ^0.8.19;
  * @notice A simple delegate contract for EIP-7702 EOAs
  * @dev Clean implementation without ERC-4337 complexity
  */
-contract EIP7702Delegate {
+contract EIP7702Delegate_old {
     // Events
     event BatchExecuted(
         address indexed account,
