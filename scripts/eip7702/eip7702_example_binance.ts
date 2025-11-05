@@ -4,15 +4,15 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-const BINANCE_RPC_URL = "https://bsc-dataseed.binance.org";
+const POLYGON_RPC_URL = "https://wild-neat-darkness.bsc.quiknode.pro/acd926c1fc3dd012c98ae4c118f5043b66dfaefe";
 const PRIVATE_KEY_1 = process.env.PRIVATE_KEY!;
 const PRIVATE_KEY_2 = process.env.DEV_PRIVATE_KEY!;
 
 const TARGET_ADDRESS_1 = "0x9E864E196698cE11cB9374bA9f258f5e5c011c48";
 const TARGET_ADDRESS_2 = "0x9E864E196698cE11cB9374bA9f258f5e5c011c48";
-const DELEGATE_CONTRACT = "0x3c291Eb0d1f7D7337dCB232b96DCC732728C15Ae";
+const DELEGATE_CONTRACT = "0x1E5076515E62417b83780FE9E88fDc79520eF27B";
 
-const provider = new ethers.JsonRpcProvider(BINANCE_RPC_URL);
+const provider = new ethers.JsonRpcProvider(POLYGON_RPC_URL);
 const delegatingAccount = new ethers.Wallet(PRIVATE_KEY_1, provider);
 const sponsorAccount = new ethers.Wallet(PRIVATE_KEY_2, provider);
 
@@ -22,6 +22,8 @@ async function checkDelegationStatus(
 ): Promise<{
   isDelegated: boolean;
   isExpectedDelegate?: boolean;
+  code: string;
+  delegatedAddress?: string;
 }> {
   console.log(`[Check] Checking delegation status for ${accountAddress}`);
   const code = await provider.getCode(accountAddress);
@@ -29,7 +31,7 @@ async function checkDelegationStatus(
 
   if (code === "0x") {
     console.log(`[Check] No delegation - account code is empty`);
-    return { isDelegated: false };
+    return { isDelegated: false, code };
   }
 
   // EIP-7702 delegation format: 0xef0100 + 20-byte address
@@ -45,75 +47,229 @@ async function checkDelegationStatus(
     return {
       isDelegated: true,
       isExpectedDelegate,
+      code,
+      delegatedAddress: delegateAddress,
     };
   }
 
   console.log(`[Check] Unknown code format - not EIP-7702 delegation`);
-  return { isDelegated: false };
+  return { isDelegated: false, code };
 }
+
+type AuthorizationEntry = {
+  chainId: bigint;
+  address: string;
+  nonce: bigint;
+  signature: ethers.Signature;
+};
 
 async function createEIP7702Authorization(
   wallet: ethers.Wallet,
   delegateAddress: string,
-  nonce: number
-): Promise<any> {
-  console.log(`[Auth] Creating EIP-7702 authorization for delegate: ${delegateAddress}`);
-  console.log(`[Auth] Using nonce: ${nonce}`);
-  
+  nonce: bigint,
+  opts?: { chainIdOverride?: bigint }
+): Promise<AuthorizationEntry> {
   const network = await provider.getNetwork();
-  const chainId = Number(network.chainId);
-  console.log(`[Auth] Chain ID: ${chainId}`);
+  const chainId = opts?.chainIdOverride ?? BigInt(network.chainId);
+  const normalizedDelegate = ethers.getAddress(delegateAddress);
 
-  // Try built-in authorize method first (if available in this ethers version)
-  if (typeof (wallet as any).authorize === 'function') {
-    console.log(`[Auth] Using built-in wallet.authorize method`);
-    const authorization = await (wallet as any).authorize({
-      address: delegateAddress,
-      nonce: nonce,
-      chainId: chainId,
-    });
-    console.log(`[Auth] Built-in authorization created successfully`);
-    return authorization;
+  console.log(`[Auth] Creating EIP-7702 authorization for delegate: ${normalizedDelegate}`);
+  console.log(`[Auth] Using nonce: ${nonce.toString()}`);
+  console.log(`[Auth] Chain ID: ${chainId.toString()}`);
+
+  const signingKey = (wallet as any).signingKey
+    ? (wallet as any).signingKey
+    : new ethers.SigningKey(wallet.privateKey);
+
+  const authorizationRequest = {
+    address: normalizedDelegate,
+    nonce,
+    chainId,
+  } as const;
+
+  const digest = ethers.hashAuthorization(authorizationRequest);
+  const signature = ethers.Signature.from(signingKey.sign(digest));
+
+  const recovered = ethers.verifyAuthorization(authorizationRequest, signature);
+  if (recovered.toLowerCase() !== wallet.address.toLowerCase()) {
+    throw new Error(
+      `Authorization signature mismatch: expected ${wallet.address}, recovered ${recovered}`
+    );
   }
 
-  // Manual EIP-7702 authorization creation
-  console.log(`[Auth] Built-in authorize not available, creating manual EIP-7702 authorization`);
-  
-  const signingKey = new ethers.SigningKey(wallet.privateKey);
-  
-  // EIP-7702 authorization signing format:
-  // keccak256(MAGIC || rlp([chain_id, address, nonce]))
-  const MAGIC = '0x05'; // EIP-7702 magic byte
-  
-  // RLP encode [chain_id, address, nonce]
-  const rlpData = ethers.encodeRlp([
-    ethers.toBeHex(chainId),
-    delegateAddress.toLowerCase(),
-    ethers.toBeHex(nonce)
-  ]);
-  
-  // Create the digest: keccak256(MAGIC || rlp_data)
-  const digest = ethers.keccak256(ethers.concat([MAGIC, rlpData]));
-  
-  const sig = signingKey.sign(digest);
-  
-  const authorization = {
-    chainId: BigInt(chainId),
-    address: delegateAddress,
-    nonce: BigInt(nonce),
-    yParity: sig.yParity,
-    r: sig.r,
-    s: sig.s
+  const authorization: AuthorizationEntry = {
+    chainId,
+    address: normalizedDelegate,
+    nonce,
+    signature,
   };
-  
-  console.log(`[Auth] Manual EIP-7702 authorization created:`, {
+
+  console.log(`[Auth] Authorization prepared:`, {
     chainId: authorization.chainId.toString(),
     address: authorization.address,
     nonce: authorization.nonce.toString(),
-    yParity: authorization.yParity
+    yParity: authorization.signature.yParity,
+    r: authorization.signature.r,
+    s: authorization.signature.s,
   });
-  
+
   return authorization;
+}
+
+async function sendDelegationTransaction(
+  delegateTarget: string,
+  txData: string,
+  options?: { chainIdOverride?: bigint }
+): Promise<AuthorizationEntry> {
+  const currentNonceBigInt = BigInt(await provider.getTransactionCount(delegatingAccount.address));
+  console.log(
+    `[Delegate] Using nonce ${currentNonceBigInt.toString()} for delegation transaction`
+  );
+
+  const authorization = await createEIP7702Authorization(
+    delegatingAccount,
+    delegateTarget,
+    currentNonceBigInt,
+    options
+  );
+
+  const feeData = await provider.getFeeData();
+
+  const delegationTx: any = {
+    to: delegatingAccount.address,
+    data: txData,
+    value: 0,
+    gasLimit: 500000,
+    type: 4,
+    authorizationList: [authorization],
+  };
+
+  if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
+    delegationTx.maxFeePerGas = feeData.maxFeePerGas;
+    delegationTx.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
+  } else if (feeData.gasPrice) {
+    delegationTx.gasPrice = feeData.gasPrice;
+  }
+
+  console.log(`[Delegate] Sending delegation Type 4 transaction...`);
+  const response = await sponsorAccount.sendTransaction(delegationTx);
+  console.log(`[Delegate] Delegation transaction sent: ${response.hash}`);
+
+  const receipt = await response.wait();
+  console.log(`[Delegate] Delegation tx confirmed in block: ${receipt?.blockNumber}`);
+  console.log(`[Delegate] Delegation tx status: ${receipt?.status}`);
+
+  if (receipt?.status !== 1) {
+    throw new Error(
+      `Delegation transaction failed with status: ${receipt?.status}`
+    );
+  }
+
+  return authorization;
+}
+
+async function ensureDelegation(
+  txData: string,
+  currentStatus?: {
+    isDelegated: boolean;
+    isExpectedDelegate?: boolean;
+    code: string;
+    delegatedAddress?: string;
+  }
+): Promise<{
+  redelegated: boolean;
+  status: {
+    isDelegated: boolean;
+    isExpectedDelegate?: boolean;
+    code: string;
+    delegatedAddress?: string;
+  };
+}> {
+  const normalizedData = txData && txData !== "" ? txData : "0x";
+
+  const initialStatus =
+    currentStatus ??
+    (await checkDelegationStatus(delegatingAccount.address, DELEGATE_CONTRACT));
+
+  if (initialStatus.isDelegated && initialStatus.isExpectedDelegate) {
+    console.log(
+      `[Delegate] Account already delegated to expected contract ${DELEGATE_CONTRACT}`
+    );
+    return { redelegated: false, status: initialStatus };
+  }
+
+  console.log(
+    `[Delegate] Re-delegating account ${delegatingAccount.address} to ${DELEGATE_CONTRACT}`
+  );
+
+  const zeroTarget = ethers.ZeroAddress;
+
+  const attempts: Array<{
+    label: string;
+    target: string;
+    chainIdOverride?: bigint;
+    expectDelegate?: boolean;
+    expectZero?: boolean;
+  }> = [
+    {
+      label: 'clear-to-zero',
+      target: zeroTarget,
+      expectZero: true,
+    },
+    {
+      label: 'assign-primary',
+      target: DELEGATE_CONTRACT,
+      expectDelegate: true,
+    },
+    {
+      label: 'assign-fallback-chainId-0',
+      target: DELEGATE_CONTRACT,
+      chainIdOverride: 0n,
+      expectDelegate: true,
+    },
+  ];
+
+  for (const attempt of attempts) {
+    console.log(`[Delegate] Attempting delegation (${attempt.label})...`);
+    await sendDelegationTransaction(
+      attempt.target,
+      attempt.expectZero ? "0x" : normalizedData,
+      attempt.chainIdOverride != null
+        ? { chainIdOverride: attempt.chainIdOverride }
+        : undefined
+    );
+
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+
+    const updatedStatus = await checkDelegationStatus(
+      delegatingAccount.address,
+      DELEGATE_CONTRACT
+    );
+
+    if (attempt.expectZero) {
+      if (updatedStatus.code === "0x" || updatedStatus.code === "0x0") {
+        console.log(`[Delegate] ✅ Delegation cleared to zero address`);
+        continue;
+      }
+      console.log(
+        `[Delegate] Delegation clearing attempt (${attempt.label}) did not reset code`
+      );
+      continue;
+    }
+
+    if (updatedStatus.isDelegated && updatedStatus.isExpectedDelegate) {
+      console.log(
+        `[Delegate] ✅ Delegation now points to expected contract ${DELEGATE_CONTRACT}`
+      );
+      return { redelegated: true, status: updatedStatus };
+    }
+
+    console.log(
+      `[Delegate] Delegation check after ${attempt.label} attempt is still mismatched`
+    );
+  }
+
+  throw new Error(`Delegation still not pointing to expected contract after update`);
 }
 
 async function sendNonSponsoredTransaction(): Promise<void> {
@@ -123,11 +279,9 @@ async function sendNonSponsoredTransaction(): Promise<void> {
     delegatingAccount.address,
     DELEGATE_CONTRACT
   );
-
-  const needsDelegation =
-    !delegationStatus.isDelegated || !delegationStatus.isExpectedDelegate;
-
-  console.log(`[NonSponsored] Needs EIP-7702 delegation: ${needsDelegation}`);
+  console.log(
+    `[NonSponsored] Delegated: ${delegationStatus.isDelegated}, expected delegate: ${delegationStatus.isExpectedDelegate}`
+  );
 
   const calls = [
     {
@@ -148,110 +302,40 @@ async function sendNonSponsoredTransaction(): Promise<void> {
     delegatingAccount
   );
   
-  let tx;
+  let txData = "0x";
   if (calls.length > 0) {
-    tx = await delegateContract.executeDirect.populateTransaction(calls);
-  } else {
-    tx = {
-      data: "0x",
-    };
-  }
-
-  console.log(`[NonSponsored] Transaction data prepared: ${tx.data?.slice(0, 42)}...`);
-
-  if (needsDelegation) {
-    console.log(`[NonSponsored] Performing EIP-7702 delegation injection...`);
-    
-    const currentNonce = await delegatingAccount.getNonce();
-    console.log(`[NonSponsored] Current nonce: ${currentNonce}`);
-    
-    // Create EIP-7702 authorization with SAME nonce as transaction
-    const authorization = await createEIP7702Authorization(
-      delegatingAccount,
-      DELEGATE_CONTRACT,
-      currentNonce
+    const populatedTx = await delegateContract.executeDirect.populateTransaction(
+      calls
     );
-
-    // Get fee data
-    const feeData = await provider.getFeeData();
-    console.log(`[NonSponsored] Fee data:`, {
-      gasPrice: feeData.gasPrice?.toString(),
-      maxFeePerGas: feeData.maxFeePerGas?.toString()
-    });
-
-    // Create EIP-7702 transaction (TYPE 4)
-    const eip7702Tx: any = {
-      to: delegatingAccount.address,
-      data: tx.data,
-      value: 0,
-      gasLimit: 500000,
-      nonce: currentNonce,
-      type: 4, // STRICT EIP-7702 transaction type
-      authorizationList: [authorization],
-    };
-
-    // Add appropriate fee fields
-    if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
-      eip7702Tx.maxFeePerGas = feeData.maxFeePerGas;
-      eip7702Tx.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
-    } else if (feeData.gasPrice) {
-      eip7702Tx.gasPrice = feeData.gasPrice;
-    }
-
-    console.log(`[NonSponsored] Sending EIP-7702 Type 4 transaction...`);
-    console.log(`[NonSponsored] Tx details:`, {
-      type: eip7702Tx.type,
-      to: eip7702Tx.to,
-      gasLimit: eip7702Tx.gasLimit?.toString(),
-      authListLength: eip7702Tx.authorizationList?.length,
-      hasGasPrice: !!eip7702Tx.gasPrice,
-      hasMaxFeePerGas: !!eip7702Tx.maxFeePerGas
-    });
-
-    const response = await delegatingAccount.sendTransaction(eip7702Tx);
-    console.log(`[NonSponsored] EIP-7702 transaction sent: ${response.hash}`);
-    
-    const receipt = await response.wait();
-    console.log(`[NonSponsored] Transaction confirmed in block: ${receipt?.blockNumber}`);
-    console.log(`[NonSponsored] Gas used: ${receipt?.gasUsed}`);
-    console.log(`[NonSponsored] Transaction status: ${receipt?.status}`);
-    
-    if (receipt?.status !== 1) {
-      throw new Error(`EIP-7702 delegation transaction failed with status: ${receipt?.status}`);
-    }
-    
-    // Verify delegation worked
-    const newCode = await provider.getCode(delegatingAccount.address);
-    console.log(`[NonSponsored] Account code after delegation: ${newCode}`);
-    
-    if (newCode === "0x" || newCode === "0x00") {
-      throw new Error(`EIP-7702 delegation failed - account code is still empty`);
-    }
-    
-    if (!newCode.startsWith("0xef0100")) {
-      throw new Error(`EIP-7702 delegation failed - account code doesn't match EIP-7702 format`);
-    }
-    
-    console.log(`[NonSponsored] ✅ EIP-7702 delegation successful: ${response.hash}`);
-  } else {
-    console.log(`[NonSponsored] Account already has EIP-7702 delegation, sending normal transaction...`);
-    
-    const normalTx = {
-      to: delegatingAccount.address,
-      data: tx.data,
-      value: 0,
-      gasLimit: 300000,
-    };
-
-    const response = await delegatingAccount.sendTransaction(normalTx);
-    const receipt = await response.wait();
-    
-    if (receipt?.status !== 1) {
-      throw new Error(`Normal transaction failed with status: ${receipt?.status}`);
-    }
-    
-    console.log(`[NonSponsored] ✅ Normal transaction successful: ${response.hash}`);
+    txData = populatedTx.data ?? "0x";
   }
+
+  console.log(`[NonSponsored] Transaction data prepared: ${txData.slice(0, 42)}...`);
+
+  const delegationResult = await ensureDelegation(txData, delegationStatus);
+
+  if (delegationResult.redelegated) {
+    console.log(`[NonSponsored] ✅ Delegation updated via Type 4 transaction`);
+    return;
+  }
+
+  console.log(`[NonSponsored] Account already has expected delegation, sending normal transaction...`);
+
+  const normalTx = {
+    to: delegatingAccount.address,
+    data: txData,
+    value: 0,
+    gasLimit: 300000,
+  };
+
+  const response = await delegatingAccount.sendTransaction(normalTx);
+  const receipt = await response.wait();
+
+  if (receipt?.status !== 1) {
+    throw new Error(`Normal transaction failed with status: ${receipt?.status}`);
+  }
+
+  console.log(`[NonSponsored] ✅ Normal transaction successful: ${response.hash}`);
 }
 
 async function sendSponsoredTransaction(): Promise<void> {
@@ -262,15 +346,18 @@ async function sendSponsoredTransaction(): Promise<void> {
     delegatingAccount.address,
     DELEGATE_CONTRACT
   );
-  
-  if (!delegationStatus.isDelegated) {
+  const ensureResult = await ensureDelegation("0x", delegationStatus);
+
+  const finalDelegationStatus = ensureResult.status;
+
+  if (!finalDelegationStatus.isDelegated) {
     throw new Error(`Account ${delegatingAccount.address} is not delegated via EIP-7702`);
   }
-  
-  if (!delegationStatus.isExpectedDelegate) {
+
+  if (!finalDelegationStatus.isExpectedDelegate) {
     throw new Error(`Account is delegated but not to the expected contract. Expected: ${DELEGATE_CONTRACT}`);
   }
-  
+
   console.log(`[Sponsored] ✅ Account has proper EIP-7702 delegation`);
 
   const calls = [
@@ -383,12 +470,15 @@ async function main(): Promise<void> {
   console.log(`💳 Delegating account balance: ${ethers.formatEther(delegatingBalance)} BNB`);
   console.log(`💳 Sponsor account balance: ${ethers.formatEther(sponsorBalance)} BNB`);
 
-  if (delegatingBalance === 0n) {
-    throw new Error(`Delegating account has no BNB for gas fees`);
-  }
-
   if (sponsorBalance === 0n) {
     throw new Error(`Sponsor account has no BNB for gas fees`);
+  }
+
+  const hasDelegatorBalance = delegatingBalance > 0n;
+  if (!hasDelegatorBalance) {
+    console.log(
+      `[Warn] Delegating account has 0 POL; will skip non-sponsored flow and rely entirely on sponsored transactions`
+    );
   }
 
   // Verify delegate contract exists
@@ -398,7 +488,11 @@ async function main(): Promise<void> {
   }
   console.log(`✅ Delegate contract verified at: ${DELEGATE_CONTRACT}`);
 
-  await sendNonSponsoredTransaction();
+  if (hasDelegatorBalance) {
+    await sendNonSponsoredTransaction();
+  } else {
+    console.log(`[Main] Skipping non-sponsored execution because delegating account is empty`);
+  }
   await sendSponsoredTransaction();
 
   console.log("🎉 EIP-7702 Demo completed successfully!");
