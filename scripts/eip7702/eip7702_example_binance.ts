@@ -144,11 +144,41 @@ async function sendDelegationTransaction(
     authorizationList: [authorization],
   };
 
-  if (feeData.maxFeePerGas && feeData.maxPriorityFeePerGas) {
-    delegationTx.maxFeePerGas = feeData.maxFeePerGas;
-    delegationTx.maxPriorityFeePerGas = feeData.maxPriorityFeePerGas;
-  } else if (feeData.gasPrice) {
-    delegationTx.gasPrice = feeData.gasPrice;
+  const minPriority = ethers.parseUnits("1", "gwei");
+  let maxFeePerGas = feeData.maxFeePerGas ?? 0n;
+  let maxPriorityFeePerGas = feeData.maxPriorityFeePerGas ?? 0n;
+
+  const needsFallback =
+    maxFeePerGas === 0n ||
+    maxPriorityFeePerGas === 0n ||
+    maxPriorityFeePerGas > maxFeePerGas;
+
+  if (needsFallback) {
+    const gasPriceHex = await provider
+      .send("eth_gasPrice", [])
+      .catch(() => null as string | null);
+
+    let fallbackGasPrice: bigint | null = feeData.gasPrice ?? null;
+
+    if (fallbackGasPrice == null && gasPriceHex) {
+      try {
+        fallbackGasPrice = BigInt(gasPriceHex);
+      } catch {
+        fallbackGasPrice = null;
+      }
+    }
+
+    fallbackGasPrice = fallbackGasPrice ?? ethers.parseUnits("3", "gwei");
+
+    maxFeePerGas = fallbackGasPrice;
+    maxPriorityFeePerGas = fallbackGasPrice >= minPriority ? minPriority : fallbackGasPrice;
+  }
+
+  delegationTx.maxFeePerGas = maxFeePerGas;
+  delegationTx.maxPriorityFeePerGas = maxPriorityFeePerGas;
+
+  if (maxPriorityFeePerGas === 0n) {
+    throw new Error("Failed to determine non-zero priority fee for delegation transaction");
   }
 
   console.log(`[Delegate] Sending delegation Type 4 transaction...`);
@@ -286,12 +316,12 @@ async function sendNonSponsoredTransaction(): Promise<void> {
   const calls = [
     {
       target: TARGET_ADDRESS_1,
-      value: ethers.parseEther("0.001"),
+      value: ethers.parseEther("0.0002"),
       data: "0x",
     },
     {
       target: TARGET_ADDRESS_2,
-      value: ethers.parseEther("0.001"),
+      value: ethers.parseEther("0.0002"),
       data: "0x",
     },
   ];
@@ -363,12 +393,12 @@ async function sendSponsoredTransaction(): Promise<void> {
   const calls = [
     {
       target: TARGET_ADDRESS_1,
-      value: ethers.parseEther("0.001"),
+      value: ethers.parseEther("0.0002"),
       data: "0x",
     },
     {
       target: TARGET_ADDRESS_2,
-      value: ethers.parseEther("0.001"),
+      value: ethers.parseEther("0.0002"),
       data: "0x",
     },
   ];
@@ -429,7 +459,7 @@ async function sendSponsoredTransaction(): Promise<void> {
   );
 
   const finalTxRequest = {
-    to: delegatingAccount.address, // Send to the delegated account
+    to: delegatingAccount.address,
     data: txData,
     value: 0,
     gasLimit: 400000,
